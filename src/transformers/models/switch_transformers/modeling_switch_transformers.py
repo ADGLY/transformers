@@ -19,6 +19,7 @@ import math
 import warnings
 from typing import Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
@@ -53,6 +54,8 @@ _CHECKPOINT_FOR_DOC = "google/switch-base-8"
 # This dict contains ids and associated url
 # for the pretrained weights provided with the models
 ####################################################
+
+from ..deprecated._archive_maps import SWITCH_TRANSFORMERS_PRETRAINED_MODEL_ARCHIVE_LIST  # noqa: F401, E402
 
 
 def router_z_loss_func(router_logits: torch.Tensor) -> float:
@@ -900,8 +903,13 @@ class SwitchTransformersStack(SwitchTransformersPreTrainedModel):
         self.device_map = None
         self.gradient_checkpointing = False
 
+        self.hotness_per_layer = [None] * config.num_layers
+
     def get_input_embeddings(self):
         return self.embed_tokens
+
+    def get_hotness_per_layer(self):
+        return np.array(list(filter(lambda hotness: hotness is not None, self.hotness_per_layer)))
 
     def set_input_embeddings(self, new_embeddings):
         self.embed_tokens = new_embeddings
@@ -1041,6 +1049,18 @@ class SwitchTransformersStack(SwitchTransformersPreTrainedModel):
                     output_attentions=output_attentions,
                     output_router_logits=output_router_logits,
                 )
+                # We are in the case of an MoE layer
+                if layer_module.is_sparse:
+                    expert_indices = layer_outputs[-1][1]
+                    if self.hotness_per_layer[i] is None:
+                        self.hotness_per_layer[i] = expert_indices.cpu().numpy()  # .astype(np.uint16)
+                    else:
+                        self.hotness_per_layer[i] = np.hstack(
+                            (
+                                self.hotness_per_layer[i],
+                                expert_indices.cpu().numpy(),  # .astype(np.uint16)
+                            )
+                        )
 
             router_probs = layer_outputs[-1]
             layer_outputs = layer_outputs[:-1]
